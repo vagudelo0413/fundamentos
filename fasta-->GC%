@@ -1,0 +1,212 @@
+import pandas as pd
+import os
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+### En el programa se pretende analizar 4 cepas de E. coli con el propósito de determinar los posibles fragmentos de secuencia en donde se podría encontrar una isla genómica basado en el porcentaje GC
+#las cepas de E. coli  a evaluar son:
+#NC_000913
+#NZ_JAVDOR010000003
+#NC_000913.3
+#Para desarrollar la rutina que automatice la graficación del porcentaje GC vs posición genoma se divide el procedimiento en 3 pasos
+
+
+
+STEP_1_DIRECTORY ="output/step1"
+STEP_2_DIRECTORY = "output/step2"
+STEP_3_DIRECTORY = "output/step3"
+SOURCE_DIRECTORY = "src"
+SIZE_OF_FRAGMENT = 10000
+UPPER_THRESHOLD = 0.55
+
+def main():
+    setup()
+    step1ExtractionProcess()
+    step1VisualizationProcess()
+    step2ExtractionProcess()
+    step2VisualizationProcess()
+    step3VisualizationProcess()
+
+def setup():
+    if not os.path.exists(STEP_1_DIRECTORY):
+        os.makedirs(STEP_1_DIRECTORY)
+    if not os.path.exists(f'{STEP_1_DIRECTORY}/plots'):
+        os.makedirs(f'{STEP_1_DIRECTORY}/plots')
+    if not os.path.exists(STEP_2_DIRECTORY):
+        os.makedirs(STEP_2_DIRECTORY)
+    if not os.path.exists(f'{STEP_2_DIRECTORY}/plots'):
+        os.makedirs(f'{STEP_2_DIRECTORY}/plots')
+    if not os.path.exists(STEP_3_DIRECTORY):
+        os.makedirs(STEP_3_DIRECTORY)
+    if not os.path.exists(f'{STEP_3_DIRECTORY}/plots'):
+        os.makedirs(f'{STEP_3_DIRECTORY}/plots')
+# Step 1
+def step1ExtractionProcess():
+    for file in os.listdir(SOURCE_DIRECTORY):
+        if file.endswith(".fasta"):
+            file_name = os.path.splitext(os.path.basename(file))[0]
+            fasta_file = os.path.join(SOURCE_DIRECTORY, file)
+            sequences_with_gc = extractFasta(fasta_file, SIZE_OF_FRAGMENT)
+
+            # Create a pandas DataFrame with two columns
+            df = pd.DataFrame(sequences_with_gc, columns=['Position', '% of G', '% of C'])
+            df['% of GC'] = df['% of G'] + df['% of C']
+            df['% of GC'] = df['% of GC'].round(2)
+            df.to_csv(f'output/step1/{file_name}.tsv', sep='\t', index=False)
+
+def extractFasta(fasta_file, size_of_fragment):
+    positions_with_gc = []
+    sequence = ""
+    position = 1
+    with open(fasta_file, "r") as f:
+        for linea in f:
+            linea_strip = linea.strip()
+            aux_sequence = sequence + linea_strip
+            if len(aux_sequence) <= size_of_fragment:
+                sequence += linea_strip
+            else:
+                sequence += linea_strip[:len(aux_sequence) - size_of_fragment]
+                positions_with_gc.append((position, calculate_g_content(sequence), calculate_c_content(sequence)))
+                position+=1
+                sequence = linea_strip[len(aux_sequence) - size_of_fragment:]
+
+    return positions_with_gc
+
+def calculate_g_content(sequence):
+    if len(sequence) != 0:
+        G = sequence.count("G") / len(sequence)
+        return round(G, 2)
+    return 0
+
+
+def calculate_c_content(sequence):
+    if len(sequence) != 0:
+        C = sequence.count("C") / len(sequence)
+        return round(C, 2)
+    return 0
+
+def step1VisualizationProcess():
+    for file in os.listdir(STEP_1_DIRECTORY):
+        if file.endswith(".tsv"):
+            file_name = os.path.splitext(os.path.basename(file))[0]
+            tsv_file = os.path.join(STEP_1_DIRECTORY, file)
+            df = pd.read_csv(tsv_file, sep='\t')
+            visualizeStep1Fasta(df, file_name)
+
+def visualizeStep1Fasta(df, file_name):
+
+    sns.histplot(data=df, x='Position', y='% of GC',
+                 cbar=True, cbar_kws=dict(shrink=.75),
+                 palette='viridis', color ='lightcoral')
+    plt.axhline(df['% of GC'].mean(),
+                color='purple',
+                linestyle='--')
+    #sns.color_palette("Spectral", as_cmap=True)
+    plt.title(f'{file_name}')
+    plt.savefig(f'{STEP_1_DIRECTORY}/plots/{file_name}_histplot.png', dpi= 600)
+    plt.clf()
+
+
+    sns.scatterplot(data=df, x='Position', y='% of GC',
+                    alpha=0.7,
+                    hue='% of GC', size='% of GC', sizes=(40, 400), palette='viridis'
+                    )
+    sns.color_palette("Spectral", as_cmap=True)
+    sns.set_theme(style='whitegrid')
+    #sns.set_context("paper")
+
+    sns.set_context("notebook", font_scale=1.2, rc={"lines.linewidth": 2.5})
+    plt.title(f'{file_name} ')
+    plt.savefig(f'{STEP_1_DIRECTORY}/plots/{file_name}_scatterplot.png', dpi= 600)
+    plt.clf()
+
+
+    sns.lineplot(data=df, x='Position', y='% of GC', color='blueviolet')
+    plt.title(f'{file_name} ')
+    plt.axhline(df['% of GC'].mean(),
+                color='pink',
+                linewidth=15,
+                alpha=0.3,
+                )
+
+    plt.savefig(f'{STEP_1_DIRECTORY}/plots/{file_name}_lineplot.png', dpi= 600)
+    plt.clf()
+    
+# Step 2
+def step2ExtractionProcess():
+    for file in os.listdir(STEP_1_DIRECTORY):
+        if file.endswith(".tsv"):
+            file_name = os.path.splitext(os.path.basename(file))[0]
+            tsv_file = os.path.join(STEP_1_DIRECTORY, file)
+            df = pd.read_csv(tsv_file, sep='\t')
+            df_filtered = calculateOutliers(df, UPPER_THRESHOLD)
+            df_filtered.to_csv(f'{STEP_2_DIRECTORY}/{file_name}.tsv', sep='\t', index=False)
+
+def calculateOutliers(df, upper_threshold):
+    outliers = []
+    for _, row in df.iterrows():
+        if row['% of GC'] > upper_threshold:
+            outliers.append(row['Position'])
+    return filterDataFrame(df, outliers)
+
+def filterDataFrame(df, selected_positions):
+    return df[df['Position'].isin(selected_positions)]
+
+def step2VisualizationProcess():
+    for file in os.listdir(STEP_1_DIRECTORY):
+        if file.endswith(".tsv"):
+            file_name = os.path.splitext(os.path.basename(file))[0]
+            step1_tsv_file = os.path.join(STEP_1_DIRECTORY, file)
+            step2_tvs_file = os.path.join(STEP_2_DIRECTORY, file)
+            df_original = pd.read_csv(step1_tsv_file, sep='\t')
+            df_outliers = pd.read_csv(step2_tvs_file, sep='\t')
+            visualizeStep2Fasta(df_original, df_outliers, file_name)
+
+
+def visualizeStep2Fasta(df_original, df_outliers, file_name):
+
+    sns.histplot(data=df_original, x='Position', y='% of GC',
+                 cbar=True, cbar_kws=dict(shrink=.75),
+                 color='cyan')
+    sns.histplot(data=df_outliers, x='Position', y='% of GC', color = 'red')
+    plt.axhline(df_original['% of GC'].mean(),
+                color='purple',
+                linestyle='--')
+    plt.title(f'{file_name} % of GC')
+    plt.savefig(f'{STEP_2_DIRECTORY}/plots/{file_name}_histplot.png', dpi= 600)
+    plt.clf()
+
+
+    sns.scatterplot(data=df_original, x='Position', y='% of GC',
+                    alpha=0.7,
+                    hue='% of GC', size='% of GC', sizes=(40, 400), palette='viridis'
+                    )
+    sns.set_theme(style='whitegrid')
+    sns.scatterplot(data=df_outliers, x='Position', y='% of GC', color = 'red')
+    plt.title(f'{file_name} % of GC')
+    plt.savefig(f'{STEP_2_DIRECTORY}/plots/{file_name}_scatterplot.png', dpi= 600)
+    plt.clf()
+
+
+    sns.lineplot(data=df_original, x='Position', y='% of GC')
+    sns.lineplot(data=df_outliers, x='Position', y='% of GC', color = 'red')
+    plt.title(f'{file_name} % of GC')
+    plt.savefig(f'{STEP_2_DIRECTORY}/plots/{file_name}_lineplot.png', dpi= 600)
+    plt.clf()
+
+#step 3
+def step3VisualizationProcess():
+    colors = ['purple', 'orange', 'green']
+    color_index = 0
+    for file in os.listdir(STEP_1_DIRECTORY):
+        if file.endswith(".tsv"):
+            file_name = os.path.splitext(os.path.basename(file))[0]
+            tsv_file = os.path.join(STEP_1_DIRECTORY, file)
+            df = pd.read_csv(tsv_file, sep='\t')
+            sns.scatterplot(data=df, x='Position', y='% of GC', label = file_name)
+            color_index += 1
+    plt.legend()
+    plt.savefig(f'{STEP_3_DIRECTORY}/plots/comparative_plot.png', dpi= 600)
+    plt.clf()
+
+main()
