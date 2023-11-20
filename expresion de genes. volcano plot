@@ -1,0 +1,112 @@
+import pandas as pd
+import scipy.stats as stats
+from statsmodels.stats.multitest import multipletests
+import numpy as np
+import matplotlib.pyplot as plt
+#import dash-bio
+
+design = pd.read_csv('experiment_design.tsv', sep='\t')[['Run','Factor Value[time]']] #dataframe con columnas run y factor value
+results = pd.read_csv('expresion_genes.tsv', sep='\t')
+
+design_zero = design[design['Factor Value[time]'] == '0 week'] #el primer design es boolean indexing, el segundo accede a factor value,
+                                                               # It selects only the rows from the original DataFrame design where the condition is True
+runs_zero = design_zero['Run']
+lista_runs_zero = runs_zero.to_list()
+
+design_24 = design[design['Factor Value[time]'] == '24 week']
+runs_24 = design_24['Run']
+lista_runs_24 = runs_24.to_list()
+
+results_sin_nulos = results[~results['Gene Name'].isna()]  #where the 'Gene Name' column is not NaN.
+
+p_values_list = []
+FC_list = []  #fold change (mide el incremento en un cambio)
+gene_list = []
+
+##Mann-whiney
+
+for index, row in results_sin_nulos.head(5000).iterrows(): #ensayo con 100, cambiar!!!
+    weeks_zero = row[lista_runs_zero]
+    weeks_24 = row[lista_runs_24]
+    _, p_value = stats.mannwhitneyu(weeks_zero.to_list(), weeks_24.to_list(), alternative = 'two-sided')
+    median_zero = weeks_zero.median()+ 0.01   #pseudoconteo
+    median_24 = weeks_24.median()+ 0.01
+    FC = median_24/median_zero
+
+    gene_list.append(index)
+    p_values_list.append(p_value)
+    FC_list.append(FC)
+    #print(index,p_value, FC)
+
+results_stats= pd.DataFrame({'gene': gene_list,
+                      'FC': FC_list,
+                      'p_value': p_values_list})
+
+##correción de datos con metodo bonferroni
+
+reject, p_corrected, _, _ = multipletests(results_stats['p_value'], method='bonferroni')
+
+results_stats['p-value_corrected'] =p_corrected
+results_stats['reject_null']= reject
+
+results_stats['log2_FC'] = np.log2(results_stats['FC'])
+results_stats['log10_p-value'] = -np.log10(results_stats['p-value_corrected'])
+#print(results_stats)
+
+alpha = 0.05 / len(results_stats)  # correcion del valor de significancia
+
+#volcano plot
+plt.figure(figsize=(10, 7))
+plt.scatter(x=results_stats['log2_FC'], y=results_stats['log10_p-value'], s=10, label="Not significant", color="orange")
+
+downregulated = results_stats[(results_stats['log2_FC'] <= -2) & (results_stats['p-value_corrected'] <= alpha)]
+plt.scatter(x=downregulated['log2_FC'], y=downregulated['log10_p-value'], s=10, label="Down-regulated", color="blue")
+
+upregulated = results_stats[(results_stats['log2_FC'] >= 2) & (results_stats['p-value_corrected'] <= alpha)]
+plt.scatter(x=upregulated['log2_FC'], y=upregulated['log10_p-value'], s=10, label="Up-regulated", color="red")
+
+
+for i, r in upregulated.iterrows():
+    plt.text(x=r['log2_FC'], y=r['log10_p-value'], s=r['gene'])
+
+plt.axvline(-2, color="grey", linestyle="--")
+plt.axvline(2, color="grey", linestyle="--")
+
+#plt.axhline(-np.log10(alpha), color="grey", linestyle="--")
+
+plt.axhline(-np.log10(0.05), color='grey', linestyle='--', linewidth=1, label='Umbral de significancia')
+plt.xlabel("log2(Fold Change)")
+plt.ylabel("-log10(Bonferroni-corrected p-value)")
+plt.legend(loc="upper right", markerscale=2, frameon=True, title="")
+plt.title("Expresión de genes con valores p corregidos", fontsize=18, fontweight="bold", color="navy")
+plt.show()
+
+#### grafica de p values sin correccion
+
+plt.figure(figsize=(10, 7))
+
+
+plt.scatter(x=results_stats['log2_FC'], y=results_stats['log10_p-value'], s=10, label="Not significant", color="orange")
+
+downregulated = results_stats[(results_stats['log2_FC'] <= -2) & (results_stats['p_value'] <= alpha)]
+plt.scatter(x=downregulated['log2_FC'], y=downregulated['log10_p-value'], s=10, label="Down-regulated", color="blue")
+
+upregulated = results_stats[(results_stats['log2_FC'] >= 2) & (results_stats['p_value'] <= alpha)]
+plt.scatter(x=upregulated['log2_FC'], y=upregulated['log10_p-value'], s=10, label="Up-regulated", color="red")
+
+
+for i, r in upregulated.iterrows():
+    plt.text(x=r['log2_FC'], y=r['log10_p-value'], s=r['gene'])
+
+
+plt.axvline(-2, color="grey", linestyle="--")
+plt.axvline(2, color="grey", linestyle="--")
+
+#plt.axhline(-np.log10(alpha), color="grey", linestyle="--")
+plt.axhline(-np.log10(0.05), color='grey', linestyle='--', linewidth=1, label='Umbral de significancia')
+
+plt.xlabel("log2(Fold Change)")
+plt.ylabel("-log10(Uncorrected p-value)")
+plt.legend(loc="upper right", markerscale=2, frameon=True, title="")
+plt.title("Expresión de genes con valores p sin corregir", fontsize=18, fontweight="bold", color="navy")
+plt.show()
